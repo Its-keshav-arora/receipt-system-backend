@@ -14,6 +14,10 @@ mongoose.connect(process.env.MONGO_URI)
 .then(() => console.log("✅ Connected to MongoDB"))
 .catch((err) => console.error("❌ MongoDB connection error:", err));
 
+app.get("/", (req, res) => {
+  res.json("Welcome to receipt system made by Keshav Arora, linkedin : www.linkedin.com/in/keshavarora2006 ");
+})
+
 app.use('/api/auth', authRoutes);
 app.use('/api', excelRoutes);
 
