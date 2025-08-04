@@ -3,6 +3,7 @@ import Box from "../models/boxes.schema.js";
 import XLSX from "xlsx";
 import fs from "fs";
 import path from "path";
+import ExcelJS from 'exceljs';
 
 export const importCustomers = async (req, res) => {
   try {
@@ -158,15 +159,16 @@ export const getCustomer = async (req, res) => {
 
   try {
     const customer = await Customer.findById(id);
+    // console.log("This is customer : ");
 
     if (!customer) {
       return res.status(404).json({ message: "Customer not found" });
     }
 
-    res.json({ customer });
+    return res.json({ customer });
   } catch (err) {
     console.error("Error fetching customer:", err);
-    res.status(500).json({ message: "Server error" });
+    return res.status(500).json({ message: "Server error" });
   }
 };
 
@@ -174,7 +176,7 @@ export const printReceipt = async (req, res) => {
   const { customerId, amountPaid, paymentMethod } = req.body;
   try {
     const customer = await Customer.findById(customerId);
-    console.log(customer);
+    // console.log(customer);
     if (!customer)
       return res.status(404).json({ message: "Customer not found" });
 
@@ -231,7 +233,7 @@ export const deleteCustomer = async (req, res) => {
       return res.status(404).json({ message: "Customer not foudn" });
     res.status(200).json({ message: "Customer deleted Successfully" });
   } catch (err) {
-    console.log("Err deleting customer : ", err);
+    // console.log("Err deleting customer : ", err);
     return res.status(500).json({ message: "Internal Server Error" });
   }
 };
@@ -269,7 +271,7 @@ export const createCustomer = async (req, res) => {
 
 export const exportCustomer = async (req, res) => {
   try {
-    console.log("This is user id : ", req.user._id);
+    // console.log("This is user id : ", req.user._id);
     const userId = req.user._id;
 
     const customers = await Customer.find({ userId });
@@ -323,5 +325,86 @@ export const exportCustomer = async (req, res) => {
   } catch (err) {
     console.error("CSV export error:", err);
     res.status(500).json({ message: "Failed to export customer data" });
+  }
+};
+
+const getUserPaymentsWithinDateRange = async (userId, from, to) => {
+  const customers = await Customer.find({ userId });
+
+  const payments = [];
+
+  customers.forEach((customer) => {
+    customer.history.forEach((entry) => {
+      const entryDate = new Date(entry.date);
+      if (entryDate >= new Date(from) && entryDate <= new Date(to)) {
+        payments.push({
+          name: customer.name,
+          mobile: customer.mobile,
+          amount: entry.amount,
+          method: entry.method,
+          date: entry.date,
+          time: entry.time,
+        });
+      }
+    });
+  });
+
+  return payments;
+};
+
+
+export const getFlatPaymentHistory = async (req, res) => {
+  const userId = req.user.id;
+  // console.log("this is user : ", userId);
+  const { from, to } = req.query;
+  // console.log("from : ",from , " & to : ", to);
+
+  if (!from || !to) {
+    return res.status(400).json({ message: 'Both from and to dates are required' });
+  }
+
+  try {
+    const payments = await getUserPaymentsWithinDateRange(userId, from, to);
+    // console.log(payments);
+    res.json({ payments });
+  } catch (err) {
+    console.error('Error fetching payments:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+export const exportFlatPaymentHistory = async (req, res) => {
+  const userId = req.user.id;
+  const { from, to } = req.query;
+
+  if (!from || !to) {
+    return res.status(400).json({ message: 'Both from and to dates are required' });
+  }
+
+  try {
+    const payments = await getUserPaymentsWithinDateRange(userId, from, to);
+
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Payments');
+
+    sheet.columns = [
+      { header: 'Name', key: 'name', width: 20 },
+      { header: 'Mobile', key: 'mobile', width: 15 },
+      { header: 'Amount', key: 'amount', width: 10 },
+      { header: 'Method', key: 'method', width: 15 },
+      { header: 'Date', key: 'date', width: 15 },
+      { header: 'Time', key: 'time', width: 10 },
+    ];
+
+    sheet.addRows(payments);
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename=payment_history.xlsx');
+
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (err) {
+    console.error('Export error:', err);
+    res.status(500).json({ message: 'Failed to export payment history' });
   }
 };
