@@ -3,12 +3,13 @@ import Box from "../models/boxes.schema.js";
 import XLSX from "xlsx";
 import fs from "fs";
 import path from "path";
-import ExcelJS from 'exceljs';
+import ExcelJS from "exceljs";
 
 export const importCustomers = async (req, res) => {
+  const userId = req.user._id;
+
   try {
     const { customers } = req.body;
-    const userId = req.user?.id || req.body.userId;
 
     if (!customers || !Array.isArray(customers) || customers.length === 0) {
       return res.status(400).json({ message: "No customer data provided" });
@@ -28,7 +29,6 @@ export const importCustomers = async (req, res) => {
 
     const allProcessed = [];
     let currentCustomer = null;
-    let currentName = null;
 
     for (const row of customers) {
       const name = (row.name ?? "").trim();
@@ -41,10 +41,9 @@ export const importCustomers = async (req, res) => {
       if (name) {
         if (currentCustomer) allProcessed.push(currentCustomer);
 
-        currentName = name;
         currentCustomer = {
           userId,
-          name: currentName,
+          name,
           boxNumbers: [],
           mobileNumbers: new Set(),
           addressList: new Set(),
@@ -70,38 +69,78 @@ export const importCustomers = async (req, res) => {
       allProcessed.push(currentCustomer);
     }
 
-    // 💾 Insert new customers
-    const toInsert = allProcessed
+    // Prepare customer docs
+    const customerDocs = allProcessed
       .filter((c) => c.boxNumbers.length > 0)
       .map((c) => ({
         userId: c.userId,
         name: c.name,
-        boxNumbers: c.boxNumbers,
         mobile: [...c.mobileNumbers].join(", "),
         address: [...c.addressList].join(", "),
         previousBalance: c.previousBalance,
         currentMonthPayment: c.currentMonthPayment,
       }));
 
-    const newBoxes = toInsert.flatMap((cust) =>
-      cust.boxNumbers.map((box) => ({
-        userId,
-        boxNumber: box,
-      }))
-    );
+    // Insert customers and get their IDs
+    const insertedCustomers = await Customer.insertMany(customerDocs);
+
+    // Now prepare boxes with customerId
+    const newBoxes = [];
+    insertedCustomers.forEach((cust, i) => {
+      const originalData = allProcessed[i];
+      originalData.boxNumbers.forEach((boxNum) => {
+        newBoxes.push({
+          userId,
+          customerId: cust._id,
+          boxNumber: boxNum,
+        });
+      });
+    });
 
     await Box.insertMany(newBoxes, { ordered: false }).catch(() => {});
-    await Customer.insertMany(toInsert);
 
     return res.status(200).json({
-      message: "✅ Customers imported (excluding existing boxes)",
-      count: toInsert.length,
+      message: "✅ Customers and their boxes imported (excluding existing boxes)",
+      customersInserted: insertedCustomers.length,
+      boxesInserted: newBoxes.length,
     });
+
   } catch (err) {
     console.error("Import Error:", err);
     return res.status(500).json({ message: "Server Error" });
   }
 };
+
+
+export const deleteAllData = async (req, res) => {
+  try {
+    const userId = req.user._id; // From token via middleware
+
+    // Find all customers of this user
+    const customers = await Customer.find({ userId });
+
+    for (const customer of customers) {
+      // Delete all boxes for this customer
+      await Box.deleteMany({ customerId: customer._id });
+
+      // Delete this customer
+      await Customer.deleteOne({ _id: customer._id });
+    }
+
+    res.json({
+      success: true,
+      message: `Deleted ${customers.length} customers and all their boxes for this user.`,
+    });
+  } catch (error) {
+    console.error("Delete customers & boxes error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to delete customers and boxes.",
+    });
+  }
+};
+
+
 
 export const searchCustomers = async (req, res) => {
   try {
@@ -352,7 +391,6 @@ const getUserPaymentsWithinDateRange = async (userId, from, to) => {
   return payments;
 };
 
-
 export const getFlatPaymentHistory = async (req, res) => {
   const userId = req.user.id;
   // console.log("this is user : ", userId);
@@ -360,7 +398,9 @@ export const getFlatPaymentHistory = async (req, res) => {
   // console.log("from : ",from , " & to : ", to);
 
   if (!from || !to) {
-    return res.status(400).json({ message: 'Both from and to dates are required' });
+    return res
+      .status(400)
+      .json({ message: "Both from and to dates are required" });
   }
 
   try {
@@ -368,8 +408,8 @@ export const getFlatPaymentHistory = async (req, res) => {
     // console.log(payments);
     res.json({ payments });
   } catch (err) {
-    console.error('Error fetching payments:', err);
-    res.status(500).json({ message: 'Server error' });
+    console.error("Error fetching payments:", err);
+    res.status(500).json({ message: "Server error" });
   }
 };
 
@@ -378,33 +418,41 @@ export const exportFlatPaymentHistory = async (req, res) => {
   const { from, to } = req.query;
 
   if (!from || !to) {
-    return res.status(400).json({ message: 'Both from and to dates are required' });
+    return res
+      .status(400)
+      .json({ message: "Both from and to dates are required" });
   }
 
   try {
     const payments = await getUserPaymentsWithinDateRange(userId, from, to);
 
     const workbook = new ExcelJS.Workbook();
-    const sheet = workbook.addWorksheet('Payments');
+    const sheet = workbook.addWorksheet("Payments");
 
     sheet.columns = [
-      { header: 'Name', key: 'name', width: 20 },
-      { header: 'Mobile', key: 'mobile', width: 15 },
-      { header: 'Amount', key: 'amount', width: 10 },
-      { header: 'Method', key: 'method', width: 15 },
-      { header: 'Date', key: 'date', width: 15 },
-      { header: 'Time', key: 'time', width: 10 },
+      { header: "Name", key: "name", width: 20 },
+      { header: "Mobile", key: "mobile", width: 15 },
+      { header: "Amount", key: "amount", width: 10 },
+      { header: "Method", key: "method", width: 15 },
+      { header: "Date", key: "date", width: 15 },
+      { header: "Time", key: "time", width: 10 },
     ];
 
     sheet.addRows(payments);
 
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', 'attachment; filename=payment_history.xlsx');
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader(
+      "Content-Disposition",
+      "attachment; filename=payment_history.xlsx"
+    );
 
     await workbook.xlsx.write(res);
     res.end();
   } catch (err) {
-    console.error('Export error:', err);
-    res.status(500).json({ message: 'Failed to export payment history' });
+    console.error("Export error:", err);
+    res.status(500).json({ message: "Failed to export payment history" });
   }
 };

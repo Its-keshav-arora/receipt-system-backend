@@ -1,6 +1,6 @@
 import express from "express";
 const router = express.Router();
-import { importCustomers, searchCustomers, getCustomer, printReceipt, editCustomer, deleteCustomer, createCustomer, exportCustomer } from "../controller/customer.controller.js";
+import { importCustomers, searchCustomers, deleteAllData, getCustomer, printReceipt, editCustomer, deleteCustomer, createCustomer, exportCustomer } from "../controller/customer.controller.js";
 import getUser from "../utils/authVerify.js";
 import { getFlatPaymentHistory, exportFlatPaymentHistory } from "../controller/customer.controller.js";
 
@@ -15,5 +15,6 @@ router.get('/customer/history', getUser, getFlatPaymentHistory);
 router.get('/customer/history/export', getUser, exportFlatPaymentHistory);
 router.get("/customer/:id", getCustomer);
 router.put("/customer/:id", editCustomer);
+router.delete("/customer/deleteAll", getUser, deleteAllData);
 
 export default router;
