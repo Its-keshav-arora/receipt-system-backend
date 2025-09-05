@@ -4,9 +4,13 @@ import XLSX from "xlsx";
 import fs from "fs";
 import path from "path";
 import ExcelJS from "exceljs";
+import dayjs from "dayjs";
+import isBetween from "dayjs/plugin/isBetween.js";
+dayjs.extend(isBetween);
 
 export const importCustomers = async (req, res) => {
   const userId = req.user._id;
+  console.log("request finally received");
 
   try {
     const { customers } = req.body;
@@ -15,21 +19,23 @@ export const importCustomers = async (req, res) => {
       return res.status(400).json({ message: "No customer data provided" });
     }
 
+    // Collect all box numbers
     const allBoxNumbers = new Set();
     customers.forEach((row) => {
       const box = (row.box ?? "").toString().trim();
       if (box) allBoxNumbers.add(box);
     });
 
+    // Check which boxes already exist
     const existingBoxes = await Box.find({
       boxNumber: { $in: [...allBoxNumbers] },
     });
-
     const existingBoxSet = new Set(existingBoxes.map((b) => b.boxNumber));
 
     const allProcessed = [];
     let currentCustomer = null;
 
+    // Process rows into customers
     for (const row of customers) {
       const name = (row.name ?? "").trim();
       const box = (row.box ?? "").toString().trim();
@@ -69,26 +75,37 @@ export const importCustomers = async (req, res) => {
       allProcessed.push(currentCustomer);
     }
 
-    // Prepare customer docs
-    const customerDocs = allProcessed
-      .filter((c) => c.boxNumbers.length > 0)
-      .map((c) => ({
-        userId: c.userId,
-        name: c.name,
-        mobile: [...c.mobileNumbers].join(", "),
-        address: [...c.addressList].join(", "),
-        previousBalance: c.previousBalance,
-        currentMonthPayment: c.currentMonthPayment,
-      }));
+    // Keep only customers with at least one new box
+    const filteredProcessed = allProcessed.filter(
+      (c) => c.boxNumbers.length > 0
+    );
 
-    // Insert customers and get their IDs
+    if (filteredProcessed.length === 0) {
+      return res.status(200).json({
+        message: "ℹ️ No new customers with unique boxes to import",
+        customersInserted: 0,
+        boxesInserted: 0,
+      });
+    }
+
+    // Prepare customer docs
+    const customerDocs = filteredProcessed.map((c) => ({
+      userId: c.userId,
+      name: c.name,
+      boxNumbers: c.boxNumbers, // ✅ now included
+      mobile: [...c.mobileNumbers].join(", "),
+      address: [...c.addressList].join(", "),
+      previousBalance: c.previousBalance,
+      currentMonthPayment: c.currentMonthPayment,
+    }));
+
+    // Insert customers
     const insertedCustomers = await Customer.insertMany(customerDocs);
 
-    // Now prepare boxes with customerId
+    // Prepare boxes with correct pairing
     const newBoxes = [];
-    insertedCustomers.forEach((cust, i) => {
-      const originalData = allProcessed[i];
-      originalData.boxNumbers.forEach((boxNum) => {
+    insertedCustomers.forEach((cust, idx) => {
+      filteredProcessed[idx].boxNumbers.forEach((boxNum) => {
         newBoxes.push({
           userId,
           customerId: cust._id,
@@ -100,16 +117,17 @@ export const importCustomers = async (req, res) => {
     await Box.insertMany(newBoxes, { ordered: false }).catch(() => {});
 
     return res.status(200).json({
-      message: "✅ Customers and their boxes imported (excluding existing boxes)",
+      message:
+        "✅ Customers and their boxes imported (excluding existing boxes)",
       customersInserted: insertedCustomers.length,
       boxesInserted: newBoxes.length,
     });
-
   } catch (err) {
     console.error("Import Error:", err);
     return res.status(500).json({ message: "Server Error" });
   }
 };
+
 
 
 export const deleteAllData = async (req, res) => {
@@ -215,7 +233,6 @@ export const printReceipt = async (req, res) => {
   const { customerId, amountPaid, paymentMethod } = req.body;
   try {
     const customer = await Customer.findById(customerId);
-    // console.log(customer);
     if (!customer)
       return res.status(404).json({ message: "Customer not found" });
 
@@ -223,8 +240,24 @@ export const printReceipt = async (req, res) => {
       customer.previousBalance + customer.currentMonthPayment - amountPaid;
 
     const now = new Date();
-    const date = now.toLocaleDateString();
-    const time = now.toLocaleTimeString();
+    const formatterDate = new Intl.DateTimeFormat("en-IN", {
+      timeZone: "Asia/Kolkata",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    const formatterTime = new Intl.DateTimeFormat("en-IN", {
+      timeZone: "Asia/Kolkata",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: true,
+    });
+
+    const date = formatterDate.format(now);
+    const time = formatterTime.format(now);
+    console.log("date : ", date);
+    console.log("time : ", time);
 
     customer.previousBalance = newBalance;
     customer.currentMonthPayment = 0;
@@ -246,6 +279,7 @@ export const printReceipt = async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 };
+
 
 export const editCustomer = async (req, res) => {
   const { _id } = req.body;
@@ -370,12 +404,20 @@ export const exportCustomer = async (req, res) => {
 const getUserPaymentsWithinDateRange = async (userId, from, to) => {
   const customers = await Customer.find({ userId });
 
+  const fromDate = dayjs(from, "YYYY-MM-DD").startOf("day");
+  const toDate = dayjs(to, "YYYY-MM-DD").endOf("day");
+
   const payments = [];
 
   customers.forEach((customer) => {
     customer.history.forEach((entry) => {
-      const entryDate = new Date(entry.date);
-      if (entryDate >= new Date(from) && entryDate <= new Date(to)) {
+      // Combine date + time string
+      const entryDateTime = dayjs(
+        `${entry.date} ${entry.time}`,
+        "DD/MM/YYYY hh:mm:ss A"
+      );
+
+      if (entryDateTime.isValid() && entryDateTime.isBetween(fromDate, toDate, null, "[]")) {
         payments.push({
           name: customer.name,
           mobile: customer.mobile,
