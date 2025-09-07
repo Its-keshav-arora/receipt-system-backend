@@ -267,6 +267,7 @@ export const printReceipt = async (req, res) => {
       time,
       amount: amountPaid,
       method: paymentMethod,
+      balance : customer.previousBalance,
     });
 
     await customer.save();

@@ -5,6 +5,7 @@ const paymentHistorySchema = new mongoose.Schema({
   date: String,
   time: String,
   amount: Number,
+  balance : Number,
   method: String,
 });
 
