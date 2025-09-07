@@ -6,7 +6,7 @@ import { getFlatPaymentHistory, exportFlatPaymentHistory } from "../controller/c
 
 // Routes
 router.post("/import", getUser, importCustomers);
-router.get("/customer/search", searchCustomers);
+router.get("/customer/search", getUser, searchCustomers);
 router.post("/receipt", printReceipt);
 router.delete("/customer/delete/:id", deleteCustomer);
 router.post("/customer/create", getUser, createCustomer);

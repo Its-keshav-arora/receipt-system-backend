@@ -128,20 +128,13 @@ export const importCustomers = async (req, res) => {
   }
 };
 
-
-
 export const deleteAllData = async (req, res) => {
   try {
-    const userId = req.user._id; // From token via middleware
-
-    // Find all customers of this user
+    const userId = req.user._id;
     const customers = await Customer.find({ userId });
 
     for (const customer of customers) {
-      // Delete all boxes for this customer
       await Box.deleteMany({ customerId: customer._id });
-
-      // Delete this customer
       await Customer.deleteOne({ _id: customer._id });
     }
 
@@ -158,8 +151,6 @@ export const deleteAllData = async (req, res) => {
   }
 };
 
-
-
 export const searchCustomers = async (req, res) => {
   try {
     const { type, query } = req.query;
@@ -170,19 +161,20 @@ export const searchCustomers = async (req, res) => {
         .json({ message: "Search type and query are required." });
     }
 
-    let filter = {};
+    // base filter: only return customers belonging to this user
+    let filter = { userId: req.user._id };
 
     switch (type) {
       case "box":
-        filter = { boxNumbers: { $regex: query, $options: "i" } };
+        filter = { ...filter, boxNumbers: { $regex: query, $options: "i" } };
         break;
 
       case "mobile":
-        filter = { mobile: { $regex: query, $options: "i" } };
+        filter = { ...filter, mobile: { $regex: query, $options: "i" } };
         break;
 
       case "name":
-        filter = { name: { $regex: query, $options: "i" } };
+        filter = { ...filter, name: { $regex: query, $options: "i" } };
         break;
 
       default:
@@ -267,7 +259,7 @@ export const printReceipt = async (req, res) => {
       time,
       amount: amountPaid,
       method: paymentMethod,
-      balance : customer.previousBalance,
+      balance: customer.previousBalance,
     });
 
     await customer.save();
@@ -280,7 +272,6 @@ export const printReceipt = async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 };
-
 
 export const editCustomer = async (req, res) => {
   const { _id } = req.body;
@@ -403,22 +394,30 @@ export const exportCustomer = async (req, res) => {
 };
 
 const getUserPaymentsWithinDateRange = async (userId, from, to) => {
-  const customers = await Customer.find({ userId });
+  const customers = await Customer.find({ userId }).select(
+    "name mobile history"
+  );
 
   const fromDate = dayjs(from, "YYYY-MM-DD").startOf("day");
   const toDate = dayjs(to, "YYYY-MM-DD").endOf("day");
+
+  console.log("from : ", fromDate.format("DD/MM/YYYY"));
+  console.log("to   : ", toDate.format("DD/MM/YYYY"));
 
   const payments = [];
 
   customers.forEach((customer) => {
     customer.history.forEach((entry) => {
-      // Combine date + time string
+      // Parse stored date string (DD/MM/YYYY) + time
       const entryDateTime = dayjs(
         `${entry.date} ${entry.time}`,
         "DD/MM/YYYY hh:mm:ss A"
       );
 
-      if (entryDateTime.isValid() && entryDateTime.isBetween(fromDate, toDate, null, "[]")) {
+      if (
+        entryDateTime.isValid() &&
+        entryDateTime.isBetween(fromDate, toDate, null, "[]")
+      ) {
         payments.push({
           name: customer.name,
           mobile: customer.mobile,
@@ -434,11 +433,12 @@ const getUserPaymentsWithinDateRange = async (userId, from, to) => {
   return payments;
 };
 
+
 export const getFlatPaymentHistory = async (req, res) => {
-  const userId = req.user.id;
-  // console.log("this is user : ", userId);
+  const userId = req.user._id;
+  console.log("this is user : ", userId);
   const { from, to } = req.query;
-  // console.log("from : ",from , " & to : ", to);
+  console.log("from : ",from , " & to : ", to);
 
   if (!from || !to) {
     return res
@@ -448,7 +448,7 @@ export const getFlatPaymentHistory = async (req, res) => {
 
   try {
     const payments = await getUserPaymentsWithinDateRange(userId, from, to);
-    // console.log(payments);
+    console.log(payments);
     res.json({ payments });
   } catch (err) {
     console.error("Error fetching payments:", err);
@@ -458,6 +458,7 @@ export const getFlatPaymentHistory = async (req, res) => {
 
 export const exportFlatPaymentHistory = async (req, res) => {
   const userId = req.user.id;
+  console.log(userId);
   const { from, to } = req.query;
 
   if (!from || !to) {
